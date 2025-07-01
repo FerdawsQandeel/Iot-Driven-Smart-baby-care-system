@@ -1,0 +1,233 @@
+#include <Wire.h>
+
+#include <LiquidCrystal_I2C.h>
+#include "DHT.h"
+ #include <SoftwareSerial.h>
+#include <SoftwareSerial.h>
+#include "VoiceRecognitionV3.h"
+#include <Servo.h>      // مكتبة التحكم في السيرفو
+Servo myServo;
+Servo myServo2;
+//Create software serial object to communicate with SIM800L
+SoftwareSerial mySerial(3, 2); //SIM800L Tx & Rx is connected to Arduino #3 & #2
+
+
+LiquidCrystal_I2C lcd(0x27, 16, 9);
+
+#define DHTPIN 9
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+unsigned long lastMsgTime = 0; // وقت آخر رسالة
+const long msgInterval = 120000; // الفترة بين الرسائل (دقيقتين )
+VR myVR(4,5);    // 4:RX 5:TX, you can choose your favourite pins.
+
+uint8_t records[7]; // save record
+uint8_t buf[64];
+
+int led = 13;
+
+#define onRecord    (0)
+#define offRecord   (1) 
+int servoPin=7;
+int servo2Pin=8;
+int flag=0;
+int rainPin = 10;    // البن الموصل عليه حساس الرطوبة
+int ledPin = 13;    // البن الموصل عليه LED
+int RelayPin=12;
+void setup() {
+  lcd.init();
+  lcd.backlight();
+  dht.begin();
+
+  pinMode(rainPin, INPUT);
+  myServo.attach(servoPin);
+  myServo2.attach(servo2Pin);   // توصيل السيرفو بالبن
+  pinMode(ledPin, OUTPUT);
+  pinMode(12, OUTPUT);  // مروحة على ريليه
+  digitalWrite(12, LOW); // المروحة مطفأة بالبداية (الريليه فعالة عند LOW)
+
+  Serial.begin(9600); // للمتابعة عبر السيريال
+
+
+//Begin serial communication with Arduino and SIM800L
+mySerial.begin(9600);
+
+Serial.println("Initializing...");
+delay(1000);
+
+mySerial.println("AT"); //Once the handshake test is successful, it will back to OK
+updateSerial();
+
+ myVR.begin(9600);
+  
+  Serial.println("Elechouse Voice Recognition V3 Module\r\nControl LED sample");
+
+  if(myVR.clear() == 0){
+    Serial.println("Recognizer cleared.");
+  }else{
+    Serial.println("Not find VoiceRecognitionModule.");
+    Serial.println("Please check connection and restart Arduino.");
+    while(1);
+  }
+  
+  if(myVR.load((uint8_t)onRecord) >= 0){
+    Serial.println("onRecord loaded");
+  }
+  
+  if(myVR.load((uint8_t)offRecord) >= 0){
+    Serial.println("offRecord loaded");
+  }
+
+
+}
+
+void loop() {
+int ret;
+  ret = myVR.recognize(buf, 50);
+  if(ret>0){
+    switch(buf[1]){
+      case onRecord:
+        /** turn on LED */
+    sms("baby craing");
+    myServo.write(150); 
+          myServo2.write(90); // تحريك السيرفو إلى زاوية 90 (مثلاً لهزّ السرير)
+delay(1000);              // الانتظار 1 ثانية
+myServo.write(30); 
+myServo2.write(0);         // العودة إلى الوضع الابتدائي
+
+        break;
+
+      case offRecord:
+        /** turn off LED*/
+        break;
+      default:
+        Serial.println("Record function undefined");
+        break;
+    }
+    /** voice recognized */
+    printVR(buf);
+  }
+  float temp = dht.readTemperature();
+
+  if (isnan(temp)) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Error reading");
+    lcd.setCursor(0, 1);
+    lcd.print("temp from DHT!");
+    } else {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Temp: ");
+    lcd.print(temp);
+    lcd.print(" C");
+
+   
+    if (temp > 27 && (millis() - lastMsgTime > msgInterval)) {
+      sms("Warning: High temperature detected in the baby's room");
+      Serial.println("High temperature alert sent");
+      digitalWrite(12, HIGH);
+      delay(100); // منع تكرار الرسائل بسرعة
+      lastMsgTime = millis();
+      Serial.println(millis());
+    }
+  }
+
+if (temp <= 27) {
+  digitalWrite(12, LOW); // إيقاف المروحة
+}
+
+  // قراءة حساس المطر وتشغيل LED بدون التأثير على شاشة LCD
+  int rainState = digitalRead(rainPin);
+
+  if (rainState == LOW  && flag==0) {  // أو HIGH حسب الحساس عند البلل
+    digitalWrite(ledPin, HIGH);
+    sms("There is wetness in the diaper");
+    Serial.println("Wet detected");
+    flag=1;
+  } 
+   if(rainState == HIGH  && flag==1){
+ flag=0;
+     digitalWrite(ledPin, LOW);
+
+  }
+  else {
+    digitalWrite(ledPin, LOW);
+    
+  }
+  
+
+  updateSerial();
+}
+
+void sms(String text){
+ 
+
+mySerial.println("AT+CMGF=1"); // Configuring TEXT mode
+updateSerial();
+mySerial.println("AT+CMGS=\"+972568740293\""); 
+updateSerial();
+mySerial.print(text); //text content
+updateSerial();
+mySerial.write(26);
+
+}
+
+void updateSerial() {
+delay(500);
+while (Serial.available()) {
+mySerial.write(Serial.read()); //Forward what Serial received to Software Serial Port
+}
+while (mySerial.available()) {
+Serial.write(mySerial.read()); //Forward what Software Serial received to Serial Port
+}
+}
+
+
+void printSignature(uint8_t *buf, int len)
+{
+  int i;
+  for(i=0; i<len; i++){
+    if(buf[i]>0x19 && buf[i]<0x7F){
+      Serial.write(buf[i]);
+    }
+    else{
+      Serial.print("[");
+      Serial.print(buf[i], HEX);
+      Serial.print("]");
+    }
+  }
+}
+
+void printVR(uint8_t *buf)
+{
+  Serial.println("VR Index\tGroup\tRecordNum\tSignature");
+
+  Serial.print(buf[2], DEC);
+  Serial.print("\t\t");
+
+  if(buf[0] == 0xFF){
+    Serial.print("NONE");
+  }
+  else if(buf[0]&0x80){
+    Serial.print("UG ");
+    Serial.print(buf[0]&(~0x80), DEC);
+  }
+  else{
+    Serial.print("SG ");
+    Serial.print(buf[0], DEC);
+  }
+  Serial.print("\t");
+
+  Serial.print(buf[1], DEC);
+  Serial.print("\t\t");
+  if(buf[3]>0){
+    printSignature(buf+4, buf[3]);
+  }
+  else{
+    Serial.print("NONE");
+  }
+  Serial.println("\r\n");
+}
+   
